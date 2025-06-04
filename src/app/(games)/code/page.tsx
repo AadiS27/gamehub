@@ -34,124 +34,17 @@ const callGeminiApi = async (prompt: string) => {
 };
 
 
-const bugChallenges = [
-  {
-    id: 1,
-    title: "Missing Semicolon",
-    level: "Easy",
-    code: `function calculateTotal(items) {
-  let total = 0
-  for (let i = 0; i < items.length; i++) {
-    total += items[i].price
-  }
-  return total
-}`,
-    bugDescription: "Missing semicolons at the end of statements",
-    correctCode: `function calculateTotal(items) {
-  let total = 0;
-  for (let i = 0; i < items.length; i++) {
-    total += items[i].price;
-  }
-  return total;
-}`,
-    points: 10,
-    xp: 15,
-  },
-  {
-    id: 2,
-    title: "Array Index Out of Bounds",
-    level: "Medium",
-    code: `function getLastElement(array) {
-  return array[array.length];
-}`,
-    bugDescription: "The array index is out of bounds",
-    correctCode: `function getLastElement(array) {
-  return array[array.length - 1];
-}`,
-    points: 20,
-    xp: 25,
-  },
-  {
-    id: 3,
-    title: "Incorrect Comparison",
-    level: "Easy",
-    code: `function checkEqual(a, b) {
-  if (a = b) {
-    return true;
-  }
-  return false;
-}`,
-    bugDescription: "Using assignment instead of comparison",
-    correctCode: `function checkEqual(a, b) {
-  if (a === b) {
-    return true;
-  }
-  return false;
-}`,
-    points: 15,
-    xp: 20,
-  },
-  {
-    id: 4,
-    title: "Infinite Loop",
-    level: "Hard",
-    code: `function countDown(n) {
-  let result = [];
-  while (n >= 0) {
-    result.push(n);
-    n++;
-  }
-  return result;
-}`,
-    bugDescription: "The loop will never terminate",
-    correctCode: `function countDown(n) {
-  let result = [];
-  while (n >= 0) {
-    result.push(n);
-    n--;
-  }
-  return result;
-}`,
-    points: 30,
-    xp: 40,
-  },
-  {
-    id: 5,
-    title: "Scope Issue",
-    level: "Medium",
-    code: `function createCounter() {
-  let count = 0;
-  
-  function increment() {
-    count++;
-  }
-  
-  return {
-    increment: increment,
-    getCount: function() {
-      return Count;
-    }
-  };
-}`,
-    bugDescription: "Incorrect variable capitalization causing reference error",
-    correctCode: `function createCounter() {
-  let count = 0;
-  
-  function increment() {
-    count++;
-  }
-  
-  return {
-    increment: increment,
-    getCount: function() {
-      return count;
-    }
-  };
-}`,
-    points: 25,
-    xp: 30,
-  },
-];
+type Challenge = {
+  id: number | string;
+  title: string;
+  level: "Easy" | "Medium" | "Hard";
+  code: string;
+  bugDescription: string;
+  correctCode: string;
+  points: number;
+  xp: number;
+  language?: string; // Optional field for language (C++, JavaScript, etc.)
+};
 
 export default function BugFinderGame() {
   // Keep your existing state variables
@@ -166,33 +59,52 @@ export default function BugFinderGame() {
   
   // Add new state variables for AI-generated challenges
   const [isLoading, setIsLoading] = useState(false);
-  const [aiChallenges, setAiChallenges] = useState<typeof bugChallenges>([]);
+  
+const [aiChallenges, setAiChallenges] = useState<Challenge[]>([]);
   const [usingAiChallenges, setUsingAiChallenges] = useState(false);
   
   const userData = useQuery(api.user.getUser, { userId: "currentUser" });
   const updateUserExp = useMutation(api.user.update);
   
   // Get the current challenge from either predefined or AI-generated list
-  const currentChallenge = usingAiChallenges 
-    ? aiChallenges[currentChallengeIndex]
-    : bugChallenges[currentChallengeIndex];
+  const currentChallenge =  aiChallenges[currentChallengeIndex]
 
   // Generate a new challenge using Gemini
   const generateChallenge = async () => {
     setIsLoading(true);
     
-    const prompt = `Generate a c++ code challenge with a bug for a game. Format as JSON with these fields:
-- title: A short descriptive title
+    const prompt = `Generate a C++ code challenge with a bug for a game. Format as JSON with these fields:
+- title: A short descriptive title (5-8 words)
 - level: "Easy", "Medium", or "Hard"
-- code: A c++ function with a bug (15-20 lines max)
-- bugDescription: A concise description of what's wrong with the code (5-10 words)
+- code: A C++ function with exactly one bug (10-15 lines max)
+- bugDescription: A precise description of what's wrong with the code (10-15 words, complete sentence)
 - correctCode: The fixed version of the code
 - points: Numerical point value (Easy: 10-15, Medium: 15-25, Hard: 25-40)
 - xp: Experience points (20-50)
-- Answer should be a single line not a word or phrase
 
-Examples of bugs:
--any
+Requirements:
+1. The bug should be clearly identifiable and have exactly one correct answer
+2. The bugDescription should be specific and unambiguous
+3. The correctCode must fix ONLY the bug, with minimal changes
+4. The challenge should compile after fixing the bug
+5. Focus on logical errors rather than syntax errors
+6. Include some fundamental DSA concepts like arrays, recursion, sorting, or data structures
+
+Common bug types:
+- Off-by-one errors in loops or array access
+- Logic errors in conditionals
+- Incorrect pointer usage
+- Memory leaks
+- Incorrect operator precedence
+- Improper initialization
+- Array traversal bugs (accessing out of bounds)
+- Missing base cases in recursive functions
+- Incorrect sorting algorithm implementation
+- Linked list pointer mishandling
+- Stack overflow due to infinite recursion
+- Binary search implementation errors
+- Tree traversal bugs
+- Queue implementation issues
 
 Output only valid JSON with these fields, no explanation or extra text.
 Wrap the JSON in triple backticks to ensure it's properly formatted.`;
@@ -299,9 +211,24 @@ Wrap the JSON in triple backticks to ensure it's properly formatted.`;
     return () => clearInterval(interval);
   }, [isTimerRunning, timer]);
   
-  // Check answer
+  // Check answer without AI
   const checkAnswer = () => {
-    const isCorrect = userAnswer.trim() === currentChallenge.bugDescription.trim();
+    // Make answer checking more lenient by checking if key parts of the description are included
+    const userAnswerLower = userAnswer.trim().toLowerCase();
+    const correctAnswerLower = currentChallenge.bugDescription.trim().toLowerCase();
+    
+    // Extract keywords from the correct answer
+    const keywords = correctAnswerLower
+      .replace(/[.,;:()]/g, '') // Remove punctuation
+      .split(' ')
+      .filter(word => word.length > 3); // Filter out short words
+    
+    // Check if enough keywords are present in the user's answer
+    const matchedKeywords = keywords.filter(keyword => userAnswerLower.includes(keyword));
+    const keywordMatchRatio = matchedKeywords.length / keywords.length;
+    
+    // Consider correct if at least 60% of keywords are present
+    const isCorrect = keywordMatchRatio >= 0.6;
     
     if (isCorrect) {
       // Calculate points (less if hint was used)
@@ -367,7 +294,7 @@ Wrap the JSON in triple backticks to ensure it's properly formatted.`;
   };
   // Move to next challenge
   const nextChallenge = () => {
-    if (currentChallengeIndex < bugChallenges.length - 1) {
+    if (currentChallengeIndex < aiChallenges.length - 1) {
       setCurrentChallengeIndex(prevIndex => prevIndex + 1);
       setUserAnswer("");
       setGameState("playing");
@@ -428,7 +355,7 @@ Wrap the JSON in triple backticks to ensure it's properly formatted.`;
     const prompt = `You are evaluating a student's answer to a coding bug identification question.
 
 Code with bug:
-\`\`\`javascript
+\`\`\`cpp
 ${currentChallenge.code}
 \`\`\`
 
@@ -436,17 +363,35 @@ Correct description of the bug: "${currentChallenge.bugDescription}"
 
 Student's answer: "${userAnswer.trim()}"
 
-Is the student's answer correct? Evaluate semantic correctness, not exact wording.
-Return only "CORRECT" or "INCORRECT" followed by a brief explanation.`;
+Is the student's answer correct? You should be somewhat lenient - if they identified the main issue even in different words, consider it correct.
+The answer should be considered correct if:
+- They identified the main problem even if using different terminology
+- They described the bug's impact correctly
+- They pointed to the right location in the code
+
+Return ONLY the word "CORRECT" or "INCORRECT" followed by a very brief explanation of why.`;
 
     const response = await callGeminiApi(prompt);
     
     if (response) {
-      const isCorrect = response.toUpperCase().includes("CORRECT");
+      // More lenient check for response containing "CORRECT"
+      const isCorrect = response.toUpperCase().includes("CORRECT") && 
+                       !response.toUpperCase().startsWith("INCORRECT");
       handleAnswerResult(isCorrect);
     } else {
-      // Fallback to exact matching if API fails
-      const isCorrect = userAnswer.trim().toLowerCase() === currentChallenge.bugDescription.trim().toLowerCase();
+      // Fallback to keyword matching if API fails
+      const userAnswerLower = userAnswer.trim().toLowerCase();
+      const correctAnswerLower = currentChallenge.bugDescription.trim().toLowerCase();
+      
+      const keywords = correctAnswerLower
+        .replace(/[.,;:()]/g, '')
+        .split(' ')
+        .filter(word => word.length > 3);
+      
+      const matchedKeywords = keywords.filter(keyword => userAnswerLower.includes(keyword));
+      const keywordMatchRatio = matchedKeywords.length / keywords.length;
+      
+      const isCorrect = keywordMatchRatio >= 0.6;
       handleAnswerResult(isCorrect);
     }
     
@@ -608,7 +553,7 @@ Return only "CORRECT" or "INCORRECT" followed by a brief explanation.`;
                 </div>
                 <div>
                   <div className="text-sm text-purple-300">Challenges</div>
-                  <div className="text-3xl font-bold text-white">{currentChallengeIndex} / {bugChallenges.length}</div>
+                  <div className="text-3xl font-bold text-white">{currentChallengeIndex} / {aiChallenges.length}</div>
                 </div>
               </div>
             </div>

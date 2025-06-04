@@ -79,7 +79,7 @@ export default function Home() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             {[
               { name: "Wordle", players: "250K", rating: 4.9, category: "Brain",url:"/wordle" },
-              { name: "Mystic Realms", players: "180K", rating: 4.8, category: "RPG" },
+              { name: "Bug Finder", players: "180K", rating: 4.8, category: "Bug" ,url:"/code"},
               { name: "Speed Racers", players: "120K", rating: 4.7, category: "Racing" },
             ].map((game, index) => (
               <Link href={game.url || "#"} key={index}>
