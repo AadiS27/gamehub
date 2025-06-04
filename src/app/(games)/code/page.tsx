@@ -9,6 +9,31 @@ import { AlertCircle, Bug, CheckCircle, Code, Zap } from "lucide-react";
 import confetti from "canvas-confetti";
 import { toast } from "sonner";
 
+
+// Utility function to call the Gemini API
+const callGeminiApi = async (prompt: string) => {
+  try {
+    const response = await fetch('/api', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ prompt }),
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to generate content');
+    }
+    
+    const data = await response.json();
+    return data.text;
+  } catch (error) {
+    console.error('Error calling Gemini API:', error);
+    return null;
+  }
+};
+
+
 const bugChallenges = [
   {
     id: 1,
@@ -129,6 +154,7 @@ const bugChallenges = [
 ];
 
 export default function BugFinderGame() {
+  // Keep your existing state variables
   const [currentChallengeIndex, setCurrentChallengeIndex] = useState(0);
   const [userAnswer, setUserAnswer] = useState("");
   const [gameState, setGameState] = useState<"playing" | "correct" | "incorrect" | "complete">("playing");
@@ -138,13 +164,115 @@ export default function BugFinderGame() {
   const [gameStarted, setGameStarted] = useState(false);
   const [hintUsed, setHintUsed] = useState(false);
   
+  // Add new state variables for AI-generated challenges
+  const [isLoading, setIsLoading] = useState(false);
+  const [aiChallenges, setAiChallenges] = useState<typeof bugChallenges>([]);
+  const [usingAiChallenges, setUsingAiChallenges] = useState(false);
+  
   const userData = useQuery(api.user.getUser, { userId: "currentUser" });
   const updateUserExp = useMutation(api.user.update);
   
-  const currentChallenge = bugChallenges[currentChallengeIndex];
+  // Get the current challenge from either predefined or AI-generated list
+  const currentChallenge = usingAiChallenges 
+    ? aiChallenges[currentChallengeIndex]
+    : bugChallenges[currentChallengeIndex];
+
+  // Generate a new challenge using Gemini
+  const generateChallenge = async () => {
+    setIsLoading(true);
+    
+    const prompt = `Generate a c++ code challenge with a bug for a game. Format as JSON with these fields:
+- title: A short descriptive title
+- level: "Easy", "Medium", or "Hard"
+- code: A c++ function with a bug (15-20 lines max)
+- bugDescription: A concise description of what's wrong with the code (5-10 words)
+- correctCode: The fixed version of the code
+- points: Numerical point value (Easy: 10-15, Medium: 15-25, Hard: 25-40)
+- xp: Experience points (20-50)
+- Answer should be a single line not a word or phrase
+
+Examples of bugs:
+-any
+
+Output only valid JSON with these fields, no explanation or extra text.
+Wrap the JSON in triple backticks to ensure it's properly formatted.`;
+
+    const response = await callGeminiApi(prompt);
+    
+    if (response) {
+      try {
+        // Extract JSON from the response if it's wrapped in backticks
+        let jsonStr = response;
+        
+        // Try to extract JSON if it's wrapped in backticks
+        const jsonMatch = response.match(/```(?:json)?([\s\S]*?)```/);
+        if (jsonMatch && jsonMatch[1]) {
+          jsonStr = jsonMatch[1].trim();
+        }
+        
+        console.log("Attempting to parse:", jsonStr);
+        
+        const challenge = JSON.parse(jsonStr);
+        
+        // Validate the challenge has all required fields
+        if (!challenge.title || !challenge.code || !challenge.bugDescription || 
+            !challenge.correctCode || !challenge.points || !challenge.xp) {
+          throw new Error("Generated challenge is missing required fields");
+        }
+        
+        // Add an ID to the challenge
+        challenge.id = Date.now();
+        
+        setAiChallenges([...aiChallenges, challenge]);
+        setIsLoading(false);
+        return challenge;
+      } catch (error) {
+        console.error("Failed to parse generated challenge:", error);
+        console.log("Raw response:", response);
+        setIsLoading(false);
+        return null;
+      }
+    } else {
+      setIsLoading(false);
+      return null;
+    }
+  };
   
-  // Start game
+  // Start game with AI-generated challenges
+  const startGameWithAI = async () => {
+    setIsLoading(true);
+    const challenges = [];
+    
+    // Generate 3 challenges
+    for (let i = 0; i < 3; i++) {
+      const challenge = await generateChallenge();
+      if (challenge) {
+        challenges.push(challenge);
+      }
+    }
+    
+    if (challenges.length > 0) {
+      setAiChallenges(challenges);
+      setUsingAiChallenges(true);
+      setGameStarted(true);
+      setIsTimerRunning(true);
+      setScore(0);
+      setCurrentChallengeIndex(0);
+      setGameState("playing");
+      setHintUsed(false);
+      setUserAnswer("");
+      setTimer(60);
+    } else {
+      toast.error("Failed to generate challenges. Using predefined ones instead.");
+      startGame();
+    }
+    
+    setIsLoading(false);
+  };
+  
+  // Start game with predefined challenges
   const startGame = () => {
+    setUsingAiChallenges(false);
     setGameStarted(true);
     setIsTimerRunning(true);
     setScore(0);
@@ -172,72 +300,71 @@ export default function BugFinderGame() {
   }, [isTimerRunning, timer]);
   
   // Check answer
-  // Check answer
-const checkAnswer = () => {
-  const isCorrect = userAnswer.trim() === currentChallenge.bugDescription.trim();
-  
-  if (isCorrect) {
-    // Calculate points (less if hint was used)
-    const pointsEarned = hintUsed ? Math.floor(currentChallenge.points / 2) : currentChallenge.points;
-    const xpEarned = hintUsed ? Math.floor(currentChallenge.xp / 2) : currentChallenge.xp;
+  const checkAnswer = () => {
+    const isCorrect = userAnswer.trim() === currentChallenge.bugDescription.trim();
     
-    setScore(prevScore => prevScore + pointsEarned);
-    setGameState("correct");
-    
-    // Trigger confetti effect for correct answer
-    confetti({
-      particleCount: 100,
-      spread: 70,
-      origin: { y: 0.6 }
-    });
-    
-    // Update user XP in database - FIX HERE
-    if (userData && userData.id !== "not_found") {
-      // Calculate new experience and check for level up
-      const newExp = userData.exp + xpEarned;
-      let newLevel = userData.level;
+    if (isCorrect) {
+      // Calculate points (less if hint was used)
+      const pointsEarned = hintUsed ? Math.floor(currentChallenge.points / 2) : currentChallenge.points;
+      const xpEarned = hintUsed ? Math.floor(currentChallenge.xp / 2) : currentChallenge.xp;
       
-      // Simple level up logic: level up when exp crosses level*100 threshold
-      const expThreshold = userData.level * 100;
-      if (newExp >= expThreshold) {
-        newLevel = userData.level + 1;
-        // Show level up notification
-        toast.success(`🎉 LEVEL UP! You reached level ${newLevel}!`, {
+      setScore(prevScore => prevScore + pointsEarned);
+      setGameState("correct");
+      
+      // Trigger confetti effect for correct answer
+      confetti({
+        particleCount: 100,
+        spread: 70,
+        origin: { y: 0.6 }
+      });
+      
+      // Update user XP in database
+      if (userData && userData.id !== "not_found") {
+        // Calculate new experience and check for level up
+        const newExp = userData.exp + xpEarned;
+        let newLevel = userData.level;
+        
+        // Simple level up logic: level up when exp crosses level*100 threshold
+        const expThreshold = userData.level * 100;
+        if (newExp >= expThreshold) {
+          newLevel = userData.level + 1;
+          // Show level up notification
+          toast.success(`🎉 LEVEL UP! You reached level ${newLevel}!`, {
+            position: "top-center",
+            duration: 5000,
+          });
+          
+          // Extra confetti for level up
+          confetti({
+            particleCount: 200,
+            spread: 180,
+            origin: { y: 0.5, x: 0.5 }
+          });
+        }
+        
+        // Update the user data in Convex
+        updateUserExp({
+          name: userData.name,
+          exp: newExp,
+          level: newLevel,
+          avatar: userData.avatar
+        }).catch(err => console.error("Failed to update XP:", err));
+        
+        toast.success(`+${xpEarned} XP earned!`, {
+          position: "top-right",
+          duration: 3000,
+        });
+      } else if (userData && userData.id === "not_found") {
+        // Handle the case where user exists in auth but not in database
+        toast.error("Please refresh the page to sync your profile before earning XP", {
           position: "top-center",
           duration: 5000,
         });
-        
-        // Extra confetti for level up
-        confetti({
-          particleCount: 200,
-          spread: 180,
-          origin: { y: 0.5, x: 0.5 }
-        });
       }
-      
-      // Update the user data in Convex
-      updateUserExp({
-        name: userData.name,
-        exp: newExp,
-        level: newLevel,
-        avatar: userData.avatar
-      }).catch(err => console.error("Failed to update XP:", err));
-      
-      toast.success(`+${xpEarned} XP earned!`, {
-        position: "top-right",
-        duration: 3000,
-      });
-    } else if (userData && userData.id === "not_found") {
-      // Handle the case where user exists in auth but not in database
-      toast.error("Please refresh the page to sync your profile before earning XP", {
-        position: "top-center",
-        duration: 5000,
-      });
+    } else {
+      setGameState("incorrect");
     }
-  } else {
-    setGameState("incorrect");
-  }
-};
+  };
   // Move to next challenge
   const nextChallenge = () => {
     if (currentChallengeIndex < bugChallenges.length - 1) {
@@ -292,6 +419,100 @@ const checkAnswer = () => {
     return result;
   };
   
+  // Check answer using Gemini
+  const checkAnswerWithAI = async () => {
+    if (!userAnswer.trim()) return;
+    
+    setIsLoading(true);
+    
+    const prompt = `You are evaluating a student's answer to a coding bug identification question.
+
+Code with bug:
+\`\`\`javascript
+${currentChallenge.code}
+\`\`\`
+
+Correct description of the bug: "${currentChallenge.bugDescription}"
+
+Student's answer: "${userAnswer.trim()}"
+
+Is the student's answer correct? Evaluate semantic correctness, not exact wording.
+Return only "CORRECT" or "INCORRECT" followed by a brief explanation.`;
+
+    const response = await callGeminiApi(prompt);
+    
+    if (response) {
+      const isCorrect = response.toUpperCase().includes("CORRECT");
+      handleAnswerResult(isCorrect);
+    } else {
+      // Fallback to exact matching if API fails
+      const isCorrect = userAnswer.trim().toLowerCase() === currentChallenge.bugDescription.trim().toLowerCase();
+      handleAnswerResult(isCorrect);
+    }
+    
+    setIsLoading(false);
+  };
+  
+  // Handle the result of the answer check
+  const handleAnswerResult = (isCorrect: boolean) => {
+    if (isCorrect) {
+      // Calculate points (less if hint was used)
+      const pointsEarned = hintUsed ? Math.floor(currentChallenge.points / 2) : currentChallenge.points;
+      const xpEarned = hintUsed ? Math.floor(currentChallenge.xp / 2) : currentChallenge.xp;
+      
+      setScore(prevScore => prevScore + pointsEarned);
+      setGameState("correct");
+      
+      // Trigger confetti effect for correct answer
+      confetti({
+        particleCount: 100,
+        spread: 70,
+        origin: { y: 0.6 }
+      });
+      
+      // Update user XP in database
+      if (userData && userData.id !== "not_found") {
+        // Calculate new experience and check for level up
+        const newExp = userData.exp + xpEarned;
+        let newLevel = userData.level;
+        
+        // Simple level up logic: level up when exp crosses level*100 threshold
+        const expThreshold = userData.level * 100;
+        if (newExp >= expThreshold) {
+          newLevel = userData.level + 1;
+          // Show level up notification
+          toast.success(`🎉 LEVEL UP! You reached level ${newLevel}!`, {
+            position: "top-center",
+            duration: 5000,
+          });
+          
+          // Extra confetti for level up
+          confetti({
+            particleCount: 200,
+            spread: 180,
+            origin: { y: 0.5, x: 0.5 }
+          });
+        }
+        
+        // Update the user data in Convex
+        updateUserExp({
+          name: userData.name,
+          exp: newExp,
+          level: newLevel,
+          avatar: userData.avatar
+        }).catch(err => console.error("Failed to update XP:", err));
+        
+        toast.success(`+${xpEarned} XP earned!`, {
+          position: "top-right",
+          duration: 3000,
+        });
+      }
+    } else {
+      setGameState("incorrect");
+    }
+  };
+
+  // Update your return JSX to include the AI option
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 py-10 px-4">
       <div className="max-w-4xl mx-auto">
@@ -353,12 +574,23 @@ const checkAnswer = () => {
               </div>
             </div>
             
-            <Button 
-              onClick={startGame} 
-              className="px-8 py-6 bg-gradient-to-r from-purple-600 to-blue-600 text-white text-lg font-medium rounded-lg hover:from-purple-700 hover:to-blue-700 transition-all transform hover:scale-105"
-            >
-              Start Challenge
-            </Button>
+            <div className="flex flex-col sm:flex-row justify-center gap-4 mt-8">
+            
+              <Button 
+                onClick={startGameWithAI} 
+                disabled={isLoading}
+                className="px-8 py-6 bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-lg font-medium rounded-lg hover:from-blue-700 hover:to-indigo-700 transition-all transform hover:scale-105"
+              >
+                {isLoading ? (
+                  <div className="flex items-center">
+                    <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white mr-2"></div>
+                    Generating Challenges...
+                  </div>
+                ) : (
+                  "Start AI Challenge"
+                )}
+              </Button>
+            </div>
           </Card>
         ) : gameState === "complete" ? (
           <Card className="p-8 bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 border border-purple-500/30 shadow-xl text-center">
@@ -382,10 +614,16 @@ const checkAnswer = () => {
             </div>
             
             <Button 
-              onClick={startGame} 
+              onClick={startGameWithAI} 
               className="px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 text-white font-medium rounded-lg hover:from-purple-700 hover:to-blue-700 transition-all"
             >
               Play Again
+            </Button>
+            <Button 
+              onClick={() => window.location.href = "/dashboard"} 
+              className="px-6 py-3 bg-gradient-to-r from-purple-600 to-blue-600 text-white font-medium rounded-lg hover:from-purple-700 hover:to-blue-700 transition-all"
+            >
+              Go  to Dashboard
             </Button>
           </Card>
         ) : (
@@ -445,11 +683,18 @@ const checkAnswer = () => {
                       </Button>
                       
                       <Button
-                        onClick={checkAnswer}
-                        disabled={!userAnswer.trim()}
+                        onClick={usingAiChallenges ? checkAnswerWithAI : checkAnswer}
+                        disabled={!userAnswer.trim() || isLoading}
                         className="bg-purple-600 hover:bg-purple-700 text-white"
                       >
-                        Submit Answer
+                        {isLoading ? (
+                          <div className="flex items-center">
+                            <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-white mr-2"></div>
+                            Checking...
+                          </div>
+                        ) : (
+                          "Submit Answer"
+                        )}
                       </Button>
                     </>
                   )}
@@ -514,6 +759,20 @@ const checkAnswer = () => {
                   </div>
                 )}
               </Card>
+            </div>
+          </div>
+        )}
+        
+        {isLoading && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-slate-900 rounded-xl p-6 flex flex-col items-center max-w-md">
+              <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-purple-500 mb-4"></div>
+              <p className="text-white text-lg font-medium">
+                {usingAiChallenges ? "AI is thinking..." : "Loading..."}
+              </p>
+              <p className="text-purple-300 text-center mt-2">
+                {usingAiChallenges ? "Generating a unique coding challenge for you." : "Please wait..."}
+              </p>
             </div>
           </div>
         )}
